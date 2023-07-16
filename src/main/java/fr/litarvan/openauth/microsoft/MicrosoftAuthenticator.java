@@ -25,6 +25,7 @@ package fr.litarvan.openauth.microsoft;
  * https://github.com/XboxReplay/xboxlive-auth
  */
 
+import com.google.gson.Gson;
 import fr.litarvan.openauth.microsoft.model.request.MinecraftLoginRequest;
 import fr.litarvan.openauth.microsoft.model.request.XSTSAuthorizationProperties;
 import fr.litarvan.openauth.microsoft.model.request.XboxLiveLoginProperties;
@@ -33,10 +34,7 @@ import fr.litarvan.openauth.microsoft.model.response.*;
 
 import java.io.UnsupportedEncodingException;
 import java.net.*;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -57,6 +55,10 @@ import java.util.regex.Pattern;
  */
 public class MicrosoftAuthenticator {
     public static final String MICROSOFT_AUTHORIZATION_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
+    public static final String DEVICE_LOGIN_CLIENT_ID = "c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb";
+    public static final String DEVICE_CODE_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+    public static final String DEVICE_CODE_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+
     public static final String MICROSOFT_TOKEN_ENDPOINT = "https://login.live.com/oauth20_token.srf";
     public static final String MICROSOFT_REDIRECTION_ENDPOINT = "https://login.live.com/oauth20_desktop.srf";
 
@@ -137,6 +139,72 @@ public class MicrosoftAuthenticator {
         try {
             return loginWithAsyncWebview().get();
         } catch (InterruptedException | ExecutionException e) {
+            throw new MicrosoftAuthenticationException(e);
+        }
+    }
+
+    public AuthTokens executeDeviceCodeLoginPoll(final MicrosoftDeviceCodeLinkResponse microsoftDeviceCodeLinkResponse, final int secondsTimeout) throws MicrosoftAuthenticationException {
+        MicrosoftDeviceLoginSuccessResponse microsoftDeviceLoginSuccessResponse = null;
+        long before = System.currentTimeMillis();
+        while (System.currentTimeMillis() - before < secondsTimeout * 1000L) {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            try {
+                microsoftDeviceLoginSuccessResponse = pollDeviceCodeLogin(
+                        microsoftDeviceCodeLinkResponse);
+                if (microsoftDeviceLoginSuccessResponse != null) break;
+            } catch (MicrosoftAuthenticationException e) {
+                // ignore
+            }
+        }
+        if (microsoftDeviceLoginSuccessResponse == null) {
+            throw new MicrosoftAuthenticationException("Timed out waiting for user to login");
+        }
+        return new AuthTokens("d=" + microsoftDeviceLoginSuccessResponse.getAccess_token(),
+                              microsoftDeviceLoginSuccessResponse.getRefresh_token());
+    }
+
+    /**
+     * Returns login code for device code login
+     * @return
+     * @throws MicrosoftAuthenticationException
+     */
+    public MicrosoftDeviceCodeLinkResponse startDeviceCodeLogin() throws MicrosoftAuthenticationException {
+        if(!System.getProperty("java.version").startsWith("1."))
+            CookieHandler.setDefault(new CookieManager());
+
+        final Map<String, String> opts = new HashMap<>();
+        opts.put("client_id", DEVICE_LOGIN_CLIENT_ID);
+        opts.put("scope", "XboxLive.signin offline_access");
+        MicrosoftDeviceCodeLinkResponse microsoftDeviceCodeLinkResponse = http.getJson(DEVICE_CODE_URL,
+                                                            opts,
+                                                            MicrosoftDeviceCodeLinkResponse.class);
+        return microsoftDeviceCodeLinkResponse;
+    }
+
+    public MicrosoftDeviceLoginSuccessResponse pollDeviceCodeLogin(final MicrosoftDeviceCodeLinkResponse microsoftDeviceCodeLinkResponse) throws MicrosoftAuthenticationException {
+        if(!System.getProperty("java.version").startsWith("1."))
+            CookieHandler.setDefault(new CookieManager());
+
+        final Map<String, String> opts = new HashMap<>();
+        opts.put("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
+        opts.put("client_id", DEVICE_LOGIN_CLIENT_ID);
+        opts.put("device_code", microsoftDeviceCodeLinkResponse.getDevice_code());
+
+        try {
+            final HttpURLConnection connection = http.postForm(DEVICE_CODE_TOKEN_URL, opts);
+            final String response = http.readResponse(connection);
+            final Gson gson = new Gson();
+            final MicrosoftApiError microsoftApiError = gson.fromJson(response, MicrosoftApiError.class);
+            if (Objects.equals(microsoftApiError.getError(), "authorization_pending")) {
+                return null;
+            } else {
+                return gson.fromJson(response, MicrosoftDeviceLoginSuccessResponse.class);
+            }
+        } catch (final Exception e) {
             throw new MicrosoftAuthenticationException(e);
         }
     }

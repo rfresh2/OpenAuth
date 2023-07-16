@@ -61,6 +61,12 @@ public class HttpClient
         return readJson(connection, responseClass);
     }
 
+    public <T> T getJson(String url, Map<String, String> opts, Class<T> responseClass) throws MicrosoftAuthenticationException {
+        HttpURLConnection connection = createConnection(url + '?' + buildParams(opts));
+        connection.addRequestProperty("Accept", MIME_TYPE_JSON);
+        return readJson(connection, responseClass);
+    }
+
     public HttpURLConnection postForm(String url, Map<String, String> params) throws MicrosoftAuthenticationException
     {
         return post(url, MIME_TYPE_URLENCODED_FORM, "*/*", buildParams(params));
@@ -111,7 +117,12 @@ public class HttpClient
 
         try
         {
-            InputStream inputStream = connection.getInputStream();
+            InputStream inputStream;
+            if (connection.getResponseCode() == 400 && connection.getErrorStream() != null) {
+                inputStream = connection.getErrorStream();
+            } else {
+                inputStream = connection.getInputStream();
+            }
 
             // check if the url corresponds to a related authentication url
             if(this.checkUrl(connection.getURL()))
@@ -159,7 +170,8 @@ public class HttpClient
                 || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/login"))
                 || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/SAS/ProcessAuth"))
                 || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/federation/oauth2"))
-                || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/oauth2/v2.0/authorize")));
+                || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/oauth2/v2.0/authorize"))
+                || ("login.microsoftonline.com".equals(url.getHost()) && url.getPath().endsWith("/oauth2/v2.0/token")));
     }
 
     protected HttpURLConnection followRedirects(HttpURLConnection connection) throws MicrosoftAuthenticationException
